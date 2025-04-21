@@ -250,7 +250,7 @@ int termReadKey(int fd) {
                 }
             } else if (seq[1] == '<') {
                 int i = 2;
-                while (i < sizeof(seq) - 1) {
+                while (i < 31) {
                     if (read(STDIN_FILENO, seq + i, 1) != 1) break;
                     if (seq[i] == 'M' || seq[i] == 'm') break;
                     i++;
@@ -335,9 +335,8 @@ int termReadKey(int fd) {
             }
         }
         break;
-    default:
-        return c;
     }
+    return c;
 }
 
 /* Use the ESC [6n escape sequence to query the horizontal cursor position
@@ -469,7 +468,7 @@ int brushTemplates[5][9][9] = {
         {0, 1, 1, 1, 1, 1, 1, 1, 0},
         {0, 0, 1, 1, 1, 1, 1, 0, 0},
     },
-    
+
 };
 
 int selectedColor = 0;
@@ -525,8 +524,6 @@ int canvasRefreshScreen(struct canvas *c) {
         printf("\x1b[%d;%dH", i, c->startx);
         printf("║");
         for (int j = c->startx + 1; j < NCOLS && j < c->startx + c->sizex - 1; j++) {
-            // if (10 * ((MOUSEX - j) * (MOUSEX - j) + (MOUSEY - i) * (MOUSEY - i) - brushSize * brushSize) < -9) {
-            // } else if (translateCanvasPosition(&mainCanvas, i, j, &cy, &cx) != -1) {
             translateCanvasPosition(&mainCanvas, i, j, &cy, &cx);
             if (isBrushPixel(cy, cx))
                 printf("\x1b[48;5;0m\x1b[38;5;15m▒\x1b[0m");
@@ -537,8 +534,6 @@ int canvasRefreshScreen(struct canvas *c) {
                 else
                     printf("\x1b[48;5;%dm ", color);
             }
-            // }
-            // printf("(%d,%d)", cy, cx);
         }
         printf("\x1b[0m");
         printf("║");
@@ -550,6 +545,8 @@ int canvasRefreshScreen(struct canvas *c) {
     printf("╝");
 
     fflush(stdout);
+
+    return 0;
 }
 
 /* ============================= Terminal update ============================ */
@@ -590,6 +587,7 @@ void termProcessKeypress(int fd) {
     // printKeyAction(c);
     // printf("              ");
     // fflush(stdout);
+    int cy, cx;
     switch (c) {
     case ENTER: /* Enter */
         break;
@@ -627,9 +625,14 @@ void termProcessKeypress(int fd) {
         break;
     case LMB_DOWN:
     case LMB_PRESSED_MOVE:
-        int cy, cx;
-        translateCanvasPosition(&mainCanvas, MOUSEY, MOUSEX, &cy, &cx);
-        setPixel(&mainCanvas, cy, cx, selectedColor);
+        if (translateCanvasPosition(&mainCanvas, MOUSEY, MOUSEX, &cy, &cx) != -1) {
+            for (int i = 0; i < 9; i++) {
+                for (int j = 0; j < 9; j++) {
+                    if (brushTemplates[brushSize - 1][i][j])
+                        setPixel(&mainCanvas, cy - 4 + i, cx - 4 + j, selectedColor);
+                }
+            }
+        }
         break;
     case SCROLL_UP:
         brushSize++;
@@ -667,7 +670,7 @@ void initTerm(void) {
     signal(SIGSEGV, clean_exit_on_sig); // <-- this one is for segmentation fault
 }
 
-int main(int argc, char **argv) {
+int main() {
 
     initTerm();
     enableRawMode(STDIN_FILENO);
