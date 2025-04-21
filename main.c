@@ -405,7 +405,7 @@ failed:
 struct canvas {
     int starty, startx;
     int sizey, sizex;
-    int *color_buf;
+    int *colorBuf;
 };
 
 #define CANVAS_INIT {1, 1, 3, 3, NULL}
@@ -474,23 +474,24 @@ int brushTemplates[5][9][9] = {
 int selectedColor = 0;
 int brushSize = 1;
 int minBrushSize = 1, maxBrushSize = 5;
+int fillMode = 0;
 
 void initializeCanvas(struct canvas *c) {
-    c->color_buf = realloc(c->color_buf, (c->sizey - 2) * (c->sizex - 2) * sizeof(int));
-    if (c->color_buf == NULL) exit(0);
+    c->colorBuf = realloc(c->colorBuf, (c->sizey - 2) * (c->sizex - 2) * sizeof(int));
+    if (c->colorBuf == NULL) exit(0);
     for (int i = 0; i < (c->sizey - 2) * (c->sizex - 2); i++)
-        c->color_buf[i] = 15;
+        c->colorBuf[i] = 15;
 }
 
 int setPixel(struct canvas *c, int y, int x, int color) {
     if (y < 0 || y > c->sizey - 3 || x < 0 || x > c->sizex - 3) return -1;
-    c->color_buf[y * (c->sizex - 2) + x] = color;
+    c->colorBuf[y * (c->sizex - 2) + x] = color;
     return 0;
 }
 
 int getPixel(struct canvas *c, int y, int x) {
     if (y < 0 || y > c->sizey - 3 || x < 0 || x > c->sizex - 3) return -1;
-    return c->color_buf[y * (c->sizex - 2) + x];
+    return c->colorBuf[y * (c->sizex - 2) + x];
 }
 
 int translateCanvasPosition(struct canvas *c, int y, int x, int *cy, int *cx) {
@@ -525,8 +526,10 @@ int canvasRefreshScreen(struct canvas *c) {
         printf("║");
         for (int j = c->startx + 1; j < NCOLS && j < c->startx + c->sizex - 1; j++) {
             translateCanvasPosition(&mainCanvas, i, j, &cy, &cx);
-            if (isBrushPixel(cy, cx))
-                printf("\x1b[48;5;0m\x1b[38;5;15m▒\x1b[0m");
+            if (fillMode && MOUSEY == i && MOUSEX == j)
+                printf("\x1b[48;5;%dm\x1b[38;5;%dmU\x1b[0m", selectedColor, (selectedColor < 7 ? 15 : 0));
+            else if (!fillMode && isBrushPixel(cy, cx))
+                printf("\x1b[48;5;%dm\x1b[38;5;%dm▒\x1b[0m", selectedColor, (selectedColor < 15 ? 15 : 7));
             else {
                 color = getPixel(&mainCanvas, cy, cx);
                 if (color < 0 || color > 15)
@@ -549,6 +552,72 @@ int canvasRefreshScreen(struct canvas *c) {
     return 0;
 }
 
+int fillCanvas(struct canvas *c, int y, int x, int old_color, int new_color) {
+    if (y < 0 || y > c->sizey - 2 || x < 0 || x > c->sizex - 2) return 0;
+    if (getPixel(c, y, x) != old_color) return 0;
+    setPixel(c, y, x, new_color);
+    return 1 +
+           fillCanvas(c, y + 1, x, old_color, new_color) +
+           fillCanvas(c, y - 1, x, old_color, new_color) +
+           fillCanvas(c, y, x + 1, old_color, new_color) +
+           fillCanvas(c, y, x - 1, old_color, new_color);
+}
+
+/* ========================= Toolbar  ======================== */
+
+int toolbarColors[22] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 7, 7, 7, 7, 7, 7};
+int toolbarSelected[22] = {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0};
+int toolbarPressed[22] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+char selectedChar[3][3][4] = {
+    {"╔", "═", "╗"},
+    {"║", " ", "║"},
+    {"╚", "═", "╝"},
+};
+char hoveredChar[3][3][4] = {
+    {"┌", "─", "┐"},
+    {"│", " ", "│"},
+    {"└", "─", "┘"},
+};
+
+char toolbarIcons[6][4] = {"/", "U", "X", "-", " ", "+"};
+
+void toolbarRefreshScreen() {
+    for (int i = 0; i < 3; i++) {
+        printf("\x1b[%d;%dH", 64 + i, (NCOLS - 3 * 22) / 2);
+        for (int j = 0; j < 22; j++) {
+            printf("\x1b[48;5;%dm", toolbarColors[j]);
+            if (toolbarColors[j] < 7)
+                printf("\x1b[38;5;15m");
+            else
+                printf("\x1b[38;5;0m");
+            for (int k = 0; k < 3; k++) {
+                if (i == 1 && k == 1) {
+                    if (j < 16)
+                        printf(" ");
+                    else if (j == 20)
+                        printf("%d", brushSize);
+                    else
+                        printf("%s", toolbarIcons[j - 16]);
+                } else if (toolbarPressed[j]) {
+                    printf("█");
+                } else if (toolbarSelected[j]) {
+                    printf("%s", selectedChar[i][k]);
+                } else if (MOUSEY >= 64 && MOUSEY <= 66 &&
+                           (NCOLS - 3 * 22) / 2 + 3 * j <= MOUSEX &&
+                           (NCOLS - 3 * 22) / 2 + 3 * j + 2 >= MOUSEX &&
+                           j != 20)
+                    printf("%s", hoveredChar[i][k]);
+                else
+                    printf(" ");
+            }
+            if (toolbarPressed[j] && i == 2) toolbarPressed[j] = 0;
+        }
+        printf("\x1b[0m");
+    }
+    fflush(stdout);
+}
+
 /* ============================= Terminal update ============================ */
 
 void drawMouse(void) {
@@ -556,7 +625,7 @@ void drawMouse(void) {
 }
 
 void termRefreshScreen(void) {
-    // abAppend(&ab,"\x1b[?25l",6); /* Hide cursor. */
+    printf("\x1b[?25l"); /* Hide cursor. */
     // write(STDOUT_FILENO, "\x1b[2J", 4); /* Clear screen */
     write(STDOUT_FILENO, "\x1b[H", 3); /* Move cursor to home */
     // mainCanvas.startx = MOUSEX;
@@ -565,6 +634,7 @@ void termRefreshScreen(void) {
     // printf(" %d %d ", cx, cy);
     // fflush(stdout);
     canvasRefreshScreen(&mainCanvas);
+    toolbarRefreshScreen();
     // drawMouse();
 
     // printf("\x1b[%d;%dH", MOUSEY, MOUSEX);
@@ -587,7 +657,7 @@ void termProcessKeypress(int fd) {
     // printKeyAction(c);
     // printf("              ");
     // fflush(stdout);
-    int cy, cx;
+    int cy, cx, toolbarBtnPressed, old_color;
     switch (c) {
     case ENTER: /* Enter */
         break;
@@ -625,11 +695,44 @@ void termProcessKeypress(int fd) {
         break;
     case LMB_DOWN:
     case LMB_PRESSED_MOVE:
+        toolbarBtnPressed = (MOUSEX - (NCOLS - 3 * 22) / 2) / 3;
+        if (64 <= MOUSEY && MOUSEY <= 66 && toolbarBtnPressed >= 0 && toolbarBtnPressed < 22) {
+            if (toolbarBtnPressed != 20)
+                toolbarPressed[toolbarBtnPressed] = 1;
+            if (toolbarBtnPressed < 16) {
+                for (int i = 0; i < 16; i++)
+                    toolbarSelected[i] = 0;
+                selectedColor = toolbarBtnPressed;
+                toolbarSelected[toolbarBtnPressed] = 1;
+            } else if (toolbarBtnPressed == 16) {
+                fillMode = 0;
+                toolbarSelected[17] = 0;
+                toolbarSelected[toolbarBtnPressed] = 1;
+            } else if (toolbarBtnPressed == 17) {
+                fillMode = 1;
+                toolbarSelected[16] = 0;
+                toolbarSelected[toolbarBtnPressed] = 1;
+            } else if (toolbarBtnPressed == 18) {
+                initializeCanvas(&mainCanvas);
+            } else if (toolbarBtnPressed == 19) {
+                brushSize--;
+                if (brushSize < minBrushSize) brushSize = minBrushSize;
+            } else if (toolbarBtnPressed == 21) {
+                brushSize++;
+                if (brushSize > maxBrushSize) brushSize = maxBrushSize;
+            }
+        }
         if (translateCanvasPosition(&mainCanvas, MOUSEY, MOUSEX, &cy, &cx) != -1) {
-            for (int i = 0; i < 9; i++) {
-                for (int j = 0; j < 9; j++) {
-                    if (brushTemplates[brushSize - 1][i][j])
-                        setPixel(&mainCanvas, cy - 4 + i, cx - 4 + j, selectedColor);
+            if (fillMode) {
+                old_color = getPixel(&mainCanvas, cy, cx);
+                if (old_color != selectedColor)
+                    fillCanvas(&mainCanvas, cy, cx, old_color, selectedColor);
+            } else {
+                for (int i = 0; i < 9; i++) {
+                    for (int j = 0; j < 9; j++) {
+                        if (brushTemplates[brushSize - 1][i][j])
+                            setPixel(&mainCanvas, cy - 4 + i, cx - 4 + j, selectedColor);
+                    }
                 }
             }
         }
@@ -660,14 +763,14 @@ void handleSigWinCh(int unused __attribute__((unused))) {
     termRefreshScreen();
 }
 
-void clean_exit_on_sig(int sig_num) {
-    printf("\n Signal %d received", sig_num);
-}
+// void clean_exit_on_sig(int sig_num) {
+//     printf("\n Signal %d received", sig_num);
+// }
 
 void initTerm(void) {
     updateWindowSize();
     signal(SIGWINCH, handleSigWinCh);
-    signal(SIGSEGV, clean_exit_on_sig); // <-- this one is for segmentation fault
+    // signal(SIGSEGV, clean_exit_on_sig);
 }
 
 int main() {
@@ -688,6 +791,16 @@ int main() {
     write(STDOUT_FILENO, "\x1b[?1006h", 8);
     write(STDOUT_FILENO, "\x1b[?1003h", 8);
     write(STDOUT_FILENO, "\x1b[?1015h", 8);
+
+    printf("\x1b[48;5;7m\x1b[38;5;8m");
+    for (int i = 0; i < NROWS * NCOLS; i++) {
+        if (rand() % 2)
+            printf("🮘");
+        else
+            printf("🮙");
+    }
+    printf("\x1b[0m");
+    fflush(stdout);
 
     termProcessKeypress(STDIN_FILENO);
     while (1) {
