@@ -33,6 +33,7 @@ enum KEY_ACTION {
     CTRL_Q = 17,     /* Ctrl-q */
     CTRL_S = 19,     /* Ctrl-s */
     CTRL_U = 21,     /* Ctrl-u */
+    CTRL_Z = 26,     /* Ctrl-u */
     ESC = 27,        /* Escape */
     BACKSPACE = 127, /* Backspace */
     /* The following are just soft codes, not really reported by the
@@ -95,6 +96,9 @@ void printKeyAction(int k) {
         break;
     case CTRL_U:
         printf("CTRL_U");
+        break;
+    case CTRL_Z:
+        printf("CTRL_Z");
         break;
     case ESC:
         printf("ESC");
@@ -179,17 +183,11 @@ void disableRawMode(int fd) {
     tcsetattr(fd, TCSAFLUSH, &orig_termios);
 }
 
-/* Called at exit to avoid remaining in raw mode. */
-void termAtExit(void) {
-    disableRawMode(STDIN_FILENO);
-}
-
 /* Raw mode: 1960 magic shit. */
 int enableRawMode(int fd) {
     struct termios raw;
 
     if (!isatty(STDIN_FILENO)) goto fatal;
-    atexit(termAtExit);
     if (tcgetattr(fd, &orig_termios) == -1) goto fatal;
 
     raw = orig_termios; /* modify the original mode */
@@ -202,8 +200,7 @@ int enableRawMode(int fd) {
     raw.c_cflag |= (CS8);
     /* local modes - echoing off, canonical off, no extended functions,
      * no signal chars (^Z,^C) */
-    // raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
-    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN);
+    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
     /* control chars - set return condition: min number of bytes and timer. */
     raw.c_cc[VMIN] = 0;  /* Return each byte, or zero for timeout. */
     raw.c_cc[VTIME] = 1; /* 100 ms timeout (unit is tens of second). */
@@ -230,9 +227,6 @@ int termReadKey(int fd) {
         /* If this is just an ESC, we'll timeout here. */
         if (read(fd, seq, 1) == 0) return ESC;
         if (read(fd, seq + 1, 1) == 0) return ESC;
-
-        // printf("%d", seq[1]);
-        // fflush(stdout);
         /* ESC [ sequences. */
         if (seq[0] == '[') {
             if (seq[1] >= '0' && seq[1] <= '9') {
@@ -259,12 +253,8 @@ int termReadKey(int fd) {
                 seq[i + 1] = '\0';
                 int type, x, y;
                 if (sscanf(seq + 1, "<%d;%d;%d", &type, &x, &y) == 3) {
-                    // printf("x:%d,y:%d", x, y);
-                    // fflush(stdout);
                     MOUSEX = x;
                     MOUSEY = y;
-                    // printf("\x1b[%d;%dH%d", MOUSEY, MOUSEX, type);
-                    // fflush(stdout);
                 }
                 switch (type) {
                 case 0:
@@ -304,8 +294,6 @@ int termReadKey(int fd) {
                 case 65:
                     return SCROLL_DOWN;
                 }
-                // printf("%s", seq + 1);
-                // fflush(stdout);
                 return ESC;
             } else {
                 switch (seq[1]) {
@@ -569,6 +557,8 @@ int toolbarColors[22] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 7
 int toolbarSelected[22] = {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0};
 int toolbarPressed[22] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
+int TOOLBARSTARTY, TOOLBARSTARTX, TOOLBARENDY, TOOLBARENDX;
+
 char selectedChar[3][3][4] = {
     {"╔", "═", "╗"},
     {"║", " ", "║"},
@@ -584,7 +574,7 @@ char toolbarIcons[6][4] = {"/", "U", "X", "-", " ", "+"};
 
 void toolbarRefreshScreen() {
     for (int i = 0; i < 3; i++) {
-        printf("\x1b[%d;%dH", 64 + i, (NCOLS - 3 * 22) / 2);
+        printf("\x1b[%d;%dH", TOOLBARSTARTY + i, TOOLBARSTARTX);
         for (int j = 0; j < 22; j++) {
             printf("\x1b[48;5;%dm", toolbarColors[j]);
             if (toolbarColors[j] < 7)
@@ -603,9 +593,9 @@ void toolbarRefreshScreen() {
                     printf("█");
                 } else if (toolbarSelected[j]) {
                     printf("%s", selectedChar[i][k]);
-                } else if (MOUSEY >= 64 && MOUSEY <= 66 &&
-                           (NCOLS - 3 * 22) / 2 + 3 * j <= MOUSEX &&
-                           (NCOLS - 3 * 22) / 2 + 3 * j + 2 >= MOUSEX &&
+                } else if (MOUSEY >= TOOLBARSTARTY && MOUSEY <= TOOLBARENDY &&
+                           TOOLBARSTARTX + 3 * j <= MOUSEX &&
+                           TOOLBARSTARTX + 3 * j + 2 >= MOUSEX &&
                            j != 20)
                     printf("%s", hoveredChar[i][k]);
                 else
@@ -625,26 +615,8 @@ void drawMouse(void) {
 }
 
 void termRefreshScreen(void) {
-    printf("\x1b[?25l"); /* Hide cursor. */
-    // write(STDOUT_FILENO, "\x1b[2J", 4); /* Clear screen */
-    write(STDOUT_FILENO, "\x1b[H", 3); /* Move cursor to home */
-    // mainCanvas.startx = MOUSEX;
-    // mainCanvas.starty = MOUSEY;
-
-    // printf(" %d %d ", cx, cy);
-    // fflush(stdout);
     canvasRefreshScreen(&mainCanvas);
     toolbarRefreshScreen();
-    // drawMouse();
-
-    // printf("\x1b[%d;%dH", MOUSEY, MOUSEX);
-    // printf("H");
-    // fflush(stdout);
-    // getMousePosition(STDIN_FILENO, STDOUT_FILENO);
-    // int y, x;
-    // getCursorPosition(STDIN_FILENO, STDOUT_FILENO, &y, &x);
-    // printf("ROWS:%d COLS: %d;  ", NROWS, NCOLS);
-    // fflush(stdout);
 }
 
 /* ========================= Term events handling  ======================== */
@@ -653,31 +625,27 @@ void termRefreshScreen(void) {
  * is typing stuff on the terminal. */
 void termProcessKeypress(int fd) {
     int c = termReadKey(fd);
-    // write(STDOUT_FILENO, "\x1b[H", 3); /* Move cursor to home */
-    // printKeyAction(c);
-    // printf("              ");
-    // fflush(stdout);
     int cy, cx, toolbarBtnPressed, old_color;
     switch (c) {
-    case ENTER: /* Enter */
+    case ENTER:
         break;
-    case CTRL_C: /* Ctrl-c */
-        break;
-    case CTRL_Q: /* Ctrl-q */
-        write(STDOUT_FILENO, "\x1b[2J\x1b[H", 7);
-        write(STDOUT_FILENO, "\x1b[?25h", 6); /* Show cursor. */
 
-        write(STDOUT_FILENO, "\x1b[?1006l", 8);
-        write(STDOUT_FILENO, "\x1b[?1003l", 8);
-        write(STDOUT_FILENO, "\x1b[?1015l", 8);
+    case CTRL_C:
         exit(0);
         break;
-    case CTRL_S: /* Ctrl-s */
+    case CTRL_Q:
+        exit(0);
+        break;
+    case CTRL_Z:
+        exit(0);
+        break;
+
+    case CTRL_S:
         break;
     case CTRL_F:
         break;
-    case BACKSPACE: /* Backspace */
-    case CTRL_H:    /* Ctrl-h */
+    case BACKSPACE:
+    case CTRL_H:
     case DEL_KEY:
         break;
     case PAGE_UP:
@@ -689,14 +657,16 @@ void termProcessKeypress(int fd) {
     case ARROW_LEFT:
     case ARROW_RIGHT:
         break;
-    case CTRL_L: /* ctrl+l*/
+
+    case CTRL_L:
         break;
     case ESC:
         break;
+
     case LMB_DOWN:
     case LMB_PRESSED_MOVE:
-        toolbarBtnPressed = (MOUSEX - (NCOLS - 3 * 22) / 2) / 3;
-        if (64 <= MOUSEY && MOUSEY <= 66 && toolbarBtnPressed >= 0 && toolbarBtnPressed < 22) {
+        toolbarBtnPressed = (MOUSEX - TOOLBARSTARTX) / 3;
+        if (TOOLBARSTARTY <= MOUSEY && MOUSEY <= TOOLBARENDY && toolbarBtnPressed >= 0 && toolbarBtnPressed < 22) {
             if (toolbarBtnPressed != 20)
                 toolbarPressed[toolbarBtnPressed] = 1;
             if (toolbarBtnPressed < 16) {
@@ -763,18 +733,12 @@ void handleSigWinCh(int unused __attribute__((unused))) {
     termRefreshScreen();
 }
 
-// void clean_exit_on_sig(int sig_num) {
-//     printf("\n Signal %d received", sig_num);
-// }
-
 void initTerm(void) {
     updateWindowSize();
     signal(SIGWINCH, handleSigWinCh);
-    // signal(SIGSEGV, clean_exit_on_sig);
 }
 
-int main() {
-
+void initClient(void) {
     initTerm();
     enableRawMode(STDIN_FILENO);
 
@@ -784,6 +748,10 @@ int main() {
     mainCanvas.starty = 1;
     initializeCanvas(&mainCanvas);
 
+    TOOLBARSTARTY = 64;
+    TOOLBARENDY = 66;
+    TOOLBARSTARTX = (NCOLS - 3 * 22) / 2;
+
     write(STDOUT_FILENO, "\x1b[2J", 4); /* Clear screen */
     write(STDOUT_FILENO, "\x1b[H", 3);  /* Move cursor to home */
 
@@ -792,6 +760,7 @@ int main() {
     write(STDOUT_FILENO, "\x1b[?1003h", 8);
     write(STDOUT_FILENO, "\x1b[?1015h", 8);
 
+    /* Draw background */
     printf("\x1b[48;5;7m\x1b[38;5;8m");
     for (int i = 0; i < NROWS * NCOLS; i++) {
         if (rand() % 2)
@@ -801,6 +770,26 @@ int main() {
     }
     printf("\x1b[0m");
     fflush(stdout);
+}
+
+void finalizeClient() {
+    disableRawMode(STDIN_FILENO);
+
+    write(STDOUT_FILENO, "\x1b[2J", 4);   /* Reset styles and colors */
+    write(STDOUT_FILENO, "\x1b[H", 3);    /* Move cursor to home */
+    write(STDOUT_FILENO, "\x1b[?25h", 6); /* Show cursor. */
+
+    /* Disable mouse reporting */
+    write(STDOUT_FILENO, "\x1b[?1006l", 8);
+    write(STDOUT_FILENO, "\x1b[?1003l", 8);
+    write(STDOUT_FILENO, "\x1b[?1015l", 8);
+
+    free(mainCanvas.colorBuf);
+}
+
+int main() {
+    initClient();
+    atexit(finalizeClient);
 
     termProcessKeypress(STDIN_FILENO);
     while (1) {
